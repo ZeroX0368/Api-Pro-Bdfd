@@ -38,7 +38,8 @@ app.get('/', (req, res) => {
         status: 'Discord Bot API Server is running',
         endpoints: [
             'POST /addroleall - Add role to all guild members',
-            'POST /roleremoveall - Remove role from all guild members'
+            'POST /roleremoveall - Remove role from all guild members',
+            'POST /unbanall - Unban all users from the server'
         ]
     });
 });
@@ -269,6 +270,105 @@ app.post('/roleremoveall', validateHeaders, async (req, res) => {
             errorCount: errorCount,
             errors: errors.slice(0, 10), // Limit errors shown
             detail: `Removed role "${role.name}" from ${successCount} users (including bots). Skipped ${skipCount} users (didn't have role). ${errorCount} errors occurred.`
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            error: 'Internal server error',
+            detail: error.message
+        });
+    }
+});
+
+// Unban all users endpoint
+app.post('/unbanall', validateHeaders, async (req, res) => {
+    try {
+        const { botToken, guildId } = req;
+        
+        // Create temporary client for this request
+        const tempClient = new Client({
+            intents: [
+                GatewayIntentBits.Guilds,
+                GatewayIntentBits.GuildBans
+            ]
+        });
+        
+        await tempClient.login(botToken);
+        
+        // Wait for client to be ready
+        await new Promise((resolve) => {
+            tempClient.once('ready', resolve);
+        });
+        
+        const guild = await tempClient.guilds.fetch(guildId);
+        
+        if (!guild) {
+            await tempClient.destroy();
+            return res.status(404).json({
+                error: 'Guild not found',
+                detail: 'The specified guild ID could not be found'
+            });
+        }
+        
+        // Check bot permissions
+        const botMember = await guild.members.fetch(tempClient.user.id);
+        if (!botMember.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+            await tempClient.destroy();
+            return res.status(403).json({
+                error: 'Insufficient permissions',
+                detail: 'Bot lacks BAN_MEMBERS permission'
+            });
+        }
+        
+        // Fetch all bans
+        const bans = await guild.bans.fetch();
+        
+        if (bans.size === 0) {
+            await tempClient.destroy();
+            return res.json({
+                success: true,
+                totalBans: 0,
+                successCount: 0,
+                errorCount: 0,
+                errors: [],
+                detail: 'No banned users found in this server'
+            });
+        }
+        
+        let successCount = 0;
+        let errorCount = 0;
+        const errors = [];
+        const unbannedUsers = [];
+        
+        for (const [userId, ban] of bans) {
+            try {
+                await guild.members.unban(userId, 'Bulk unban via API');
+                successCount++;
+                unbannedUsers.push({
+                    id: userId,
+                    username: ban.user.username,
+                    tag: ban.user.tag
+                });
+                
+                // Add small delay to avoid rate limits
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+            } catch (error) {
+                errorCount++;
+                errors.push(`Failed to unban ${ban.user.username}: ${error.message}`);
+            }
+        }
+        
+        await tempClient.destroy();
+        
+        res.json({
+            success: true,
+            totalBans: bans.size,
+            successCount: successCount,
+            errorCount: errorCount,
+            errors: errors.slice(0, 10), // Limit errors shown
+            unbannedUsers: unbannedUsers.slice(0, 20), // Limit users shown in response
+            detail: `Successfully unbanned ${successCount} out of ${bans.size} banned users. ${errorCount} errors occurred.`
         });
         
     } catch (error) {
