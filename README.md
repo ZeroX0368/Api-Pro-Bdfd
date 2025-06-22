@@ -1,2 +1,4 @@
-# Api-Role-Add-Remove-Bdfd
-Api Add Role All From Server And Role Remove All User From Server
+
+Api Add Role All
+Api Role Remove All User From Server
+Api unbanall member all server
