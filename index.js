@@ -44,6 +44,8 @@ app.get('/', (req, res) => {
             'POST /addroleall - Add role to all guild members',
             'POST /roleremoveall - Remove role from all guild members',
             'POST /unbanall - Unban all users from the server',
+            'GET /banlist - Get list of banned users from the server',
+            'GET /guild/membercount - Get member count statistics for the server',
             'POST /set-ai - Generate AI text using Pollinations API',
             'POST /reset-ai - Reset AI conversational bot for a channel'
         ]
@@ -276,6 +278,150 @@ app.post('/roleremoveall', validateHeaders, async (req, res) => {
             errorCount: errorCount,
             errors: errors.slice(0, 10), // Limit errors shown
             detail: `Removed role "${role.name}" from ${successCount} users (including bots). Skipped ${skipCount} users (didn't have role). ${errorCount} errors occurred.`
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            error: 'Internal server error',
+            detail: error.message
+        });
+    }
+});
+
+// Get banned users list endpoint
+app.get('/banlist', validateHeaders, async (req, res) => {
+    try {
+        const { botToken, guildId } = req;
+        
+        // Create temporary client for this request
+        const tempClient = new Client({
+            intents: [
+                GatewayIntentBits.Guilds,
+                GatewayIntentBits.GuildBans
+            ]
+        });
+        
+        await tempClient.login(botToken);
+        
+        // Wait for client to be ready
+        await new Promise((resolve) => {
+            tempClient.once('ready', resolve);
+        });
+        
+        const guild = await tempClient.guilds.fetch(guildId);
+        
+        if (!guild) {
+            await tempClient.destroy();
+            return res.status(404).json({
+                error: 'Guild not found',
+                detail: 'The specified guild ID could not be found'
+            });
+        }
+        
+        // Check bot permissions
+        const botMember = await guild.members.fetch(tempClient.user.id);
+        if (!botMember.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+            await tempClient.destroy();
+            return res.status(403).json({
+                error: 'Insufficient permissions',
+                detail: 'Bot lacks BAN_MEMBERS permission'
+            });
+        }
+        
+        // Fetch all bans
+        const bans = await guild.bans.fetch();
+        
+        const bannedUsers = [];
+        
+        for (const [userId, ban] of bans) {
+            bannedUsers.push({
+                id: userId,
+                username: ban.user.username,
+                discriminator: ban.user.discriminator,
+                tag: ban.user.tag,
+                avatar: ban.user.displayAvatarURL(),
+                reason: ban.reason || 'No reason provided',
+                bannedAt: ban.user.createdAt
+            });
+        }
+        
+        await tempClient.destroy();
+        
+        res.json({
+            success: true,
+            guildId: guildId,
+            guildName: guild.name,
+            totalBans: bans.size,
+            bannedUsers: bannedUsers,
+            detail: `Retrieved ${bans.size} banned users from server "${guild.name}"`
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            error: 'Internal server error',
+            detail: error.message
+        });
+    }
+});
+
+// Get guild member count endpoint
+app.get('/guild/membercount', validateHeaders, async (req, res) => {
+    try {
+        const { botToken, guildId } = req;
+        
+        // Create temporary client for this request
+        const tempClient = new Client({
+            intents: [
+                GatewayIntentBits.Guilds,
+                GatewayIntentBits.GuildMembers
+            ]
+        });
+        
+        await tempClient.login(botToken);
+        
+        // Wait for client to be ready
+        await new Promise((resolve) => {
+            tempClient.once('ready', resolve);
+        });
+        
+        const guild = await tempClient.guilds.fetch(guildId);
+        
+        if (!guild) {
+            await tempClient.destroy();
+            return res.status(404).json({
+                error: 'Guild not found',
+                detail: 'The specified guild ID could not be found'
+            });
+        }
+        
+        // Fetch all members to get accurate counts
+        const members = await guild.members.fetch();
+        
+        let userCount = 0;
+        let botCount = 0;
+        
+        members.forEach(member => {
+            if (member.user.bot) {
+                botCount++;
+            } else {
+                userCount++;
+            }
+        });
+        
+        const totalCount = userCount + botCount;
+        
+        await tempClient.destroy();
+        
+        res.json({
+            success: true,
+            guildId: guildId,
+            guildName: guild.name,
+            count: {
+                users: userCount,
+                bots: botCount,
+                total: totalCount
+            },
+            detail: `Retrieved member count for server "${guild.name}": ${userCount} users, ${botCount} bots, ${totalCount} total`
         });
         
     } catch (error) {
